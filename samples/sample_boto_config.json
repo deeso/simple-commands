@@ -29,7 +29,13 @@
          "regions": ["us-east-2"],
          "multi_region": false,
          "max_count": 1,
-         "username": "ubuntu"
+         "username": "ubuntu",
+         "command_string_parameters": [
+            {"name":"mongo_user",  "value":"mongo_user"},
+            {"name":"mongo_password", "value":"fill_me_in"},
+            {"name":"container_name", "value":"collector_mongo"}
+         ],
+         "activities": ["setup_collector", "upload_collector_configs", "start_container"]
         },
         {"name": "dockerhp-mongodb",
          "instance_type": "t2.micro",
@@ -51,30 +57,11 @@
          "username": "ubuntu",
          "command_string_parameters": [
             {"name":"mongo_user",  "value":"mongo_user"},
-            {"name":"mongo_password", "value":"fill_me_in"}
+            {"name":"mongo_password", "value":"fill_me_in"},
+            {"name":"container_name", "value":"collector_mongo"}
          ],
-         "setup_commands": [
-            "sudo mkfs.ext4 /dev/xvdf",
-            "sudo mkdir -p /opt/data/mongo",
-            "chmod a+rw -R /opt/data",
-            "sudo apt update && sudo apt install -y apt-transport-https ca-certificates curl software-properties-common git python3-pip",
-            "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -",
-            "sudo add-apt-repository \"deb [arch=amd64] https://download.docker.com/linux/ubuntu bionic stable\"",
-            "sudo apt update && sudo apt install -y docker-ce docker-compose",
-            "sudo usermod -aG docker ${USER}",
-            "echo 'MONGO_INITDB_ROOT_USERNAME={mongo_username}' >> .env",
-            "echo 'MONGO_INITDB_ROOT_PASSWORD={mongo_password}' >> .env",
-            "mkdir ssl",
-            "mkdir dockerfiles"
-         ],
-         "upload_files": [
-            {"src": "ssl/mongodb.pem", "dst": "./ssl/mongodb.pem"},
-            {"src": "ssl/ca-dockerhp-collector.crt", "dst": "./ssl/ca-dockerhp-collector.crt"},
-            {"src": "ssl/ca-dockerhp-collector.crt", "dst": "./ssl/ca-dockerhp-collector.crt"},
-            {"src": "dockerfiles/mongodb", "dst": "./dockerfiles/mongodb"},
-            {"src": "docker-compose.yaml", "dst": "docker-compose.yaml"},
-         ]
-        }
+         "activities": ["setup_mongodb", "upload_mongodb_configs", "start_container"]
+     }
     ],
     "tag_specs": [
         {"name": "dockerhp-tags",
@@ -194,6 +181,56 @@
         "eu-west-1": "ami-07ee42ba0209b6d77",
         "eu-west-2": "ami-04edc9c2bfcf9a772",
         "eu-west-3": "ami-03d4fca0a9ced3d1f"
+    },
+    "activities":{
+        "setup_mongodb": {"type": "command", 
+            "commands": [
+                "sudo mkfs.ext4 /dev/xvdf",
+                "sudo mkdir -p /opt/data/mongo",
+                "chmod a+rw -R /opt/data",
+                "sudo apt update && sudo apt install -y apt-transport-https ca-certificates curl software-properties-common git python3-pip",
+                "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -",
+                "sudo add-apt-repository \"deb [arch=amd64] https://download.docker.com/linux/ubuntu bionic stable\"",
+                "sudo apt update && sudo apt install -y docker-ce docker-compose",
+                "sudo usermod -aG docker ${USER}",
+                "echo 'MONGO_INITDB_ROOT_USERNAME={mongo_username}' >> .env",
+                "echo 'MONGO_INITDB_ROOT_PASSWORD={mongo_password}' >> .env",
+                "mkdir ssl",
+                "mkdir dockerfiles"
+            ]
+        },
+        "setup_collector": {"type": "command", 
+            "commands": [
+                "sudo apt update && sudo apt install -y apt-transport-https ca-certificates curl software-properties-common git python3-pip",
+                "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -",
+                "sudo add-apt-repository \"deb [arch=amd64] https://download.docker.com/linux/ubuntu bionic stable\"",
+                "sudo apt update && sudo apt install -y docker-ce docker-compose",
+                "sudo usermod -aG docker ${USER}",
+                "mkdir ssl",
+                "mkdir dockerfiles"
+            ]
+        },
+        "start_container": {"type": "command", 
+            "commands": [
+                "docker-compose up -d {container_name}"
+            ]
+        },
+        "upload_mongodb_configs": {"type": "upload_files", 
+            "files":[
+                {"src": "ssl/mongodb.pem", "dst": "./ssl/mongodb.pem"},
+                {"src": "ssl/ca-dockerhp-collector.crt", "dst": "./ssl/ca-dockerhp-collector.crt"},
+                {"src": "ssl/ca-dockerhp-collector.crt", "dst": "./ssl/ca-dockerhp-collector.crt"},
+                {"src": "dockerfiles/mongodb", "dst": "./dockerfiles/mongodb"},
+                {"src": "docker-compose.yaml", "dst": "docker-compose.yaml"}
+        ]},
+        "upload_collector_configs": {"type": "upload_files", 
+            "files":[
+                {"src": "ssl/collector-cert.pem", "dst": "./ssl/collector-cert.pem"},
+                {"src": "ssl/collector-key.pem", "dst": "./ssl/collector-key.pem"},
+                {"src": "ssl/ca-dockerhp-collector.crt", "dst": "./ssl/ca-dockerhp-collector.crt"},
+                {"src": "dockerfiles/collector", "dst": "./dockerfiles/collector"},
+                {"src": "docker-compose.yaml", "dst": "docker-compose.yaml"}
+        ]}
     }
 
 }
