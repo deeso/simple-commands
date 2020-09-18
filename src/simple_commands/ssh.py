@@ -1,3 +1,4 @@
+from .util import *
 from .consts import *
 import os
 import paramiko
@@ -6,42 +7,31 @@ import io
 import time
 
 class Commands(object):
+    LOGGER = get_stream_logger(__name__ + '.Commands')
+
     @classmethod
-    def get_client(cls, host, retrys=3, **kargs):
+    def get_client(cls, host, retrys=3, fail_timeout=10.0, **kargs):
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         
         keys = ['username', 'key_filename', 'password']
         _kargs = {k:kargs.get(k) for k in keys if kargs.get(k, None)}
+        username = kargs.get('username')
         # print(_kargs)
         success = False
         while retrys > 0:
             try:
                 client.connect(host, **_kargs)
                 success = True
+                cls.LOGGER.info("Connected to {}@{}".format(host, username))
                 break
             except:
                 retrys += -1
-                time.sleep(10)
+                cls.LOGGER.info("Failed connection, sleeping for {} to {}@{}".format(fail_timeout, host, username))
+                time.sleep(fail_timeout)
                 client = paramiko.SSHClient()
                 client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         return client if success else None
-
-    @classmethod
-    def install_docker(cls, host, port=22, key_filename=None, password=None, username=UBUNTU, commands=DOCKER_SETUP_COMMANDS):
-        output = []
-        client = cls.get_client(host, port=port, key_filename=key_filename, password=password, username=username)
-        for cmd in commands:
-            _, stdout, stderr = client.exec_command(cmd)
-            results = {'command': cmd, 'stdout': None, 'stderr': None}
-            results['stdout'] = stdout.read()
-            results['stderr'] = stderr.read()
-            if debug:
-                print(results['stdout'])
-            output.append
-
-        stdout.read()
-        return output
 
     @classmethod
     def upload_file(cls, src, dst, host=None, port=22, key_filename=None, password=None, username=UBUNTU, client=None):
@@ -52,7 +42,9 @@ class Commands(object):
         output = []
         client = cls.get_client(host=host, port=port, key_filename=key_filename, password=password, username=username, client=client)
         scp_client = scp.SCPClient(client.get_transport())
+        cls.LOGGER.info("SCP uploading {} files".format(len(dsts_srcs)))
         for dst, src in dsts_srcs.items():
+            cls.LOGGER.debug("SCP uploading {} --> {}".format(src, dst))
             scp_client.put(src, dst)            
         return True        
 
@@ -65,8 +57,10 @@ class Commands(object):
         output = []
         client = cls.get_client(host=host, port=port, key_filename=key_filename, password=password, username=username, client=client)
         scp_client = scp.SCPClient(client.get_transport())
+        cls.LOGGER.info("SCP uploading {} files".format(len(dst_src_buffer)))
         for dst, src_buffer in dst_src_buffer.items():
             new_file = io.BytesIO(src_buffer)
+            cls.LOGGER.debug("SCP uploading src_buffer --> {}".format(dst))
             scp_client.putfo(new_file, dst)            
         return True
 
@@ -78,13 +72,16 @@ class Commands(object):
             raise Exception("paramiko.SSHClient or ssh parameters required")
 
         output = []
+        cls.LOGGER.info("Executing {} commands".format(len(commands)))
         for cmd in commands:
-            _, stdout, stderr = client.exec_command(cmd.format(**cmd_kargs))
+            _cmd = cmd.format(**cmd_kargs)
+            cls.LOGGER.debug("SSH executing '{}' on host".format(_cmd))
+            _, stdout, stderr = client.exec_command(_cmd)
             results = {'command': cmd, 'stdout': None, 'stderr': None}
             results['stdout'] = stdout.read()
             results['stderr'] = stderr.read()
             if debug:
-                print(results['stdout'])
+                cls.LOGGER.info("SSH execute results '{}' on host".format(results['stdout']))
             output.append(results)
         return results
 

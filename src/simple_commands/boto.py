@@ -8,6 +8,7 @@ class Commands(object):
     AWS_ACCESS_KEY_ID = None
     DEFAULT_REGION='us-east-2'
     REGIONS = [DEFAULT_REGION]
+    LOGGER = get_stream_logger(__name__ + '.Commands')
 
     @classmethod
     def get_image_id(cls, instance_name, region, boto_config):
@@ -195,6 +196,7 @@ class Commands(object):
     @classmethod
     def get_ec2(cls, ec2=None, region=DEFAULT_REGION, aws_secret_access_key=None, aws_access_key_id=None, **kargs):
         if ec2 is None:
+            cls.LOGGER.debug("Creating ec2 client for {} in {}".format(region, aws_access_key_id))
             aws_secret_access_key = aws_secret_access_key if aws_secret_access_key else cls.AWS_SECRET_ACCESS_KEY
             aws_access_key_id = aws_access_key_id if aws_access_key_id else cls.AWS_ACCESS_KEY_ID
             ec2 = boto3.client('ec2', 
@@ -207,6 +209,7 @@ class Commands(object):
     def delete_key_pair(cls, keyname, **kargs):
         ec2 = cls.get_ec2(**kargs)
         try:
+            cls.LOGGER.info("Deleting keypair: {}".format(keyname))
             ec2.delete_key_pair(KeyName=keyname)
         except:
             raise
@@ -226,10 +229,13 @@ class Commands(object):
 
         try:
             os.remove(key_filename)
+            cls.LOGGER.info("Deleted key file from disk: {}".format(key_filename))
         except:
             pass
 
+        cls.LOGGER.info("Creating keypair: {}".format(key_name))
         key_pair = ec2.create_key_pair(KeyName=key_name)
+        cls.LOGGER.info("Writing key file to disk: {}".format(key_filename))
         outfile = open(key_filename,'w')
         KeyPairOut = str(key_pair['KeyMaterial'])
         outfile.write(KeyPairOut)
@@ -242,13 +248,16 @@ class Commands(object):
         ec2 = cls.get_ec2(**kargs)
         _kargs = {}
         if sg_id:
+            cls.LOGGER.info("Deleting Security Group ID: {}".format(sg_id))
             _kargs['GroupId'] = sg_name
         elif sg_name:
+            cls.LOGGER.info("Deleting Security Group: {}".format(sg_name))
             _kargs['GroupName'] = sg_name
         else:
             return False
         try:
             rsp = ec2.delete_security_group(**_kargs)
+            cls.LOGGER.info("Deleted Security Group".format())
             return True
         except:
             pass
@@ -266,9 +275,13 @@ class Commands(object):
         except:
             pass
 
+        cls.LOGGER.info("Creating Security Group: {}".format(sg_name))
         rsp = ec2.create_security_group(GroupName=sg_name,
                                              Description=sg_description)
         sg_id = rsp.get('GroupId', None)
+        if sg_id is None:
+            raise Exception("Unable to create the security group")
+        cls.LOGGER.info("Updating Security Group {} ingress rules".format(sg_id))
         ec2.authorize_security_group_ingress(GroupId=sg_id, IpPermissions=ingress)
         return sg_id
 
@@ -297,6 +310,7 @@ class Commands(object):
         for k in del_keys:
             del _kargs[k]
 
+        cls.LOGGER.info("Starting {} '{}' instances in with {} ".format(max_count, instance_type, key_name))
         reservations = ec2.run_instances(**_kargs) 
 
         instances = [i['InstanceId'] for i in reservations['Instances']]
@@ -327,23 +341,23 @@ class Commands(object):
     def wait_for_instances(cls, instance_ids, **kargs):
         ec2 = cls.get_ec2(**kargs)
         instance_statuses = None
+        cls.LOGGER.info("Waiting for {} instances to be reachable".format(len(instance_ids)))
         while True:
-            # print(instance_ids)
-            rsp = ec2.describe_instance_status(InstanceIds=instance_ids)
-            # print(rsp)
-            instance_statuses = {i['InstanceId']: i for i in rsp['InstanceStatuses']}
-            if len(instance_statuses) == 0:
+            loaded_instances = cls.check_for_instances_up(instance_ids)
+            if len(loaded_instances) == 0:
                 time.sleep(5.0)
-            elif all([i['InstanceState']['Code'] == 16 for i in instance_statuses.values()]):
+            elif len(loaded_instances) == len(instance_ids):
                 break
             else:
                 time.sleep(10.0)
+        cls.LOGGER.info("{} instances are available".format(len(instance_ids)))
         return instance_statuses
 
     @classmethod
     def wait_for_volumes(cls, volume_ids, **kargs):
         ec2 = cls.get_ec2(**kargs)
         statuses = None
+        cls.LOGGER.info("{} volumes to be available".format(len(volume_ids)))
         while True:
             # print(instance_ids)
             rsp = ec2.describe_volumes(VolumeIds=volume_ids)
@@ -355,6 +369,7 @@ class Commands(object):
                 break
             else:
                 time.sleep(10.0)
+        cls.LOGGER.info("{} volumes are available".format(len(volume_ids)))
         return statuses
 
     @classmethod
@@ -363,6 +378,9 @@ class Commands(object):
         instance_config = cls.get_instance_description(instance_name, boto_config)
         if len(instance_config) == 0:
             raise Exception("Incomplete instance configurations")
+        max_count = max_count if max_count else instance_config.get('max_count', 1)
+
+        cls.LOGGER.info("Creatinng {} instances for '{}' in {}".format(max_count, instance_name, region))
         instance_sg_configs = cls.get_instance_security_group_configs(instance_name, boto_config)
         instance_volume_configs = cls.get_instance_volumes_configs(instance_name, boto_config)
 
@@ -407,6 +425,7 @@ class Commands(object):
         volume_results = None
         if len(volume_names) > 0:
             # create the volume
+            cls.LOGGER.info("Creating {} volumes for '{}' in {}".format(len(volume_names), instance_name, region))
             volume_results = cls.attach_instances_to_volumes(instance_name, instance_statuses, volume_names, boto_config)
         return instance_infos, volume_results
 
@@ -470,6 +489,7 @@ class Commands(object):
     @classmethod
     def attach_volume(cls, instance_id, volume_id, device_name, **kargs):
         ec2 = cls.get_ec2(**kargs)
+        cls.LOGGER.info("Attaching volume ({}) to '{}' as {}".format(instance_id, volume_id, device_name))
         rsp = ec2.attach_volume(InstanceId=instance_id, VolumeId=volume_id, Device=device_name)
         return rsp
 
@@ -494,6 +514,11 @@ class Commands(object):
         if size:
             _kargs["Size"] = size
         # print(_kargs)
+        if snapshotid:
+            cls.LOGGER.info("Creating volume ({}:{}) using {} in {}".format(volumetype, size, snapshotid, availability_zone, ))
+        else:    
+            cls.LOGGER.info("Creating volume ({}:{}) in {} for".format(volumetype, size, availability_zone))
+
         rsp = ec2.create_volume(**_kargs)
         # print(rsp)
         if 'VolumeId' in rsp:

@@ -1,10 +1,15 @@
-from simple_commands.consts import *
-from simple_commands import boto
-from simple_commands import ssh
+from .consts import *
+from .util import *
+from . import boto
+from . import ssh
 import traceback
 import json
 import os
 
+import logging
+ACTION_LOGGER = get_stream_logger(__name__)
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s :: %(levelname)s :: %(message)s')
 command_strings_to_dict = lambda x: {i['name']: i['value'] for i in x}
 
 def perform_activity(instance_name, all_instances, activity_name, 
@@ -24,7 +29,7 @@ def perform_activity(instance_name, all_instances, activity_name,
         key_filename = list(all_instances.values())[0]['KeyName']
         key_file = os.path.join(keypath, key_filename)
         ssh_reqs[iid] = {'key_file': key_file, 'host': instance_public_ip[iid], 'username': username}
-
+    ACTION_LOGGER.info("Performing {} for {} ({} instances)".format(activity_name, instance_name, len(instances)))
     return perform_instance_activities(instance_name, all_instances, activity_name,  activity, 
                                        all_actions, ssh_reqs, command_format_args)
 
@@ -44,7 +49,7 @@ def perform_instance_activities(instance_name:str, all_instances:dict, activity_
     for action in steps:
         activity = all_actions.get(action)
         atype = activity.get('type')
-        
+
         if atype == 'commands':
             # create the command list
             commands = [i.format(**command_format_args) for i in activity.get('commands', [])]
@@ -56,7 +61,7 @@ def perform_instance_activities(instance_name:str, all_instances:dict, activity_
             # TODO execute the commands
             for instance_id, ssh_req in ssh_reqs.items():
                 host, key_file, username = unpack_ssh_reqs(ssh_req)
-                print('Executing: {} on {}'.format(action, host))
+                ACTION_LOGGER.debug("Performing {}:{} ({} elements) for {}@{} with {}".format(activity_name, atype, len(commands), username, host, key_file))
                 result = ssh.Commands.execute_commands(commands, host=host, key_filename=key_file, username=username)
                 outcome = {'instance_id': instance_id, "host": host, 'result': result}
                 aresults["results"].append(outcome)
@@ -72,7 +77,7 @@ def perform_instance_activities(instance_name:str, all_instances:dict, activity_
                         "results":[]}
             # scp the files over
             for instance_id, ssh_req in ssh_reqs.items():
-                print('Executing: {} on {}'.format(action, host))
+                ACTION_LOGGER.debug("Performing {}:{} ({} elements) for {}@{} with {}".format(activity_name, atype, len(dst_src), username, host, key_file))
                 host, key_file, username = unpack_ssh_reqs(ssh_req)
                 result = ssh.Commands.upload_files(dst_src, host=host, key_filename=key_file, username=username)
                 outcome = {'instance_id': instance_id, "host": host, 'result': result}
@@ -85,6 +90,7 @@ def perform_instance_activities(instance_name:str, all_instances:dict, activity_
             # scp the files over
             for instance_id, ssh_req in ssh_reqs.items():
                 host, key_file, username = unpack_ssh_reqs(ssh_req)
+                ACTION_LOGGER.debug("Invalid activity {}:{} for {}@{} with {}".format(activity_name, atype, username, host, key_file))
                 outcome = {'instance_id': instance_id, "host": host, 'result': "Unsupported action"}
                 aresults["results"].append(outcome)
             activity_results['step_results'].append(aresults)
@@ -93,6 +99,7 @@ def perform_instance_activities(instance_name:str, all_instances:dict, activity_
 
 def build_instance_and_setup(instance_name, config, setup_activity_name="setup", command_format_args: dict=None, region=None, max_count=None):
     #initialize the boto command
+    ACTION_LOGGER.debug("Initializing the boto.Commands klass".format())
     boto.Commands.set_config(**config)
 
     # get instance config
@@ -114,7 +121,9 @@ def build_instance_and_setup(instance_name, config, setup_activity_name="setup",
     keypath = config.get('ssh_key_path', '')
     
     # use the config to set up the hosts
+    ACTION_LOGGER.info("Creating {} instances in {} for '{}'".format(max_count, region, instance_name))
     all_instances, all_volumes = boto.Commands.build_instance_region(region, instance_name, config, max_count=max_count)
+    ACTION_LOGGER.info("Created {} instances and {} volumes for '{}' in {}".format(len(all_instances), len(all_volumes), instance_name, region))
     instance_public_ip = boto.Commands.get_instance_public_ips([i for i in all_instances], **config)
     
     # create path to ssh key
@@ -123,10 +132,11 @@ def build_instance_and_setup(instance_name, config, setup_activity_name="setup",
     
     # perform setup activity
     setup_results = None
+    ACTION_LOGGER.info("Setting-up {} instances and {} volumes for '{}' in {} with activity: '{}'".format(len(all_instances), len(all_volumes), instance_name, region, setup_activity_name))
     try:
         setup_results = perform_activity(instance_name, all_instances, setup_activity_name, instance_public_ip, config, command_format_args)
     except:
-        traceback.print_exc()
+        ACTION_LOGGER.info("Failed setup: {} ".format(traceback.format_exc()))
     return all_instances, instance_public_ip, all_volumes, setup_results
 
 def build_instance_and_setup_multi_regions_count(instance_name, config, regions, max_count, command_format_args=None, setup_activity_name="setup"):

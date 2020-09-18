@@ -7,13 +7,15 @@ import asyncio
 from hypercorn.config import Config as HyperConfig
 from hypercorn.asyncio import serve
 from .consts import *
+import looging
 
 class Hypercorn(Quart):
     APP_TEMP_DIR = tempfile.TemporaryDirectory()
     CERTS_PATH = os.path.join(APP_TEMP_DIR.name, 'ssl')
+    LOGGER = get_stream_logger(__name__ + '.Hypercorn')
     def __init__(self, name, host='0.0.0.0', port=DEFAULT_PORT, 
                  ca_crt=None, server_crt=None, server_key=None, initialize_certs=True, 
-                 certs_path=CERTS_PATH, debug=False):
+                 certs_path=CERTS_PATH, debug=False, level=logging.INFO):
         super().__init__(name)
         self._App_host = host
         self._App_port = port
@@ -22,6 +24,8 @@ class Hypercorn(Quart):
         self._App_server_key = None
         self._App_server_crt = None
 
+        if debug or level == logging.DEBUG:
+            reset_logger_level(cls.LOGGER, level)
 
         if ca_crt is not None and \
            server_crt is not None and \
@@ -54,7 +58,7 @@ class Hypercorn(Quart):
         config = HyperConfig()
         config.debug = self.debug
         config.access_log_format = "%(h)s %(r)s %(s)s %(b)s %(D)s"
-        config.accesslog = DOCKER_HP_LOGGER
+        config.accesslog = cls.LOGGER
         config.bind = ["{host}:{port}".format(**{'host':self._App_host,
                                                  'port':self._App_port})]
         config.certfile = self._App_server_crt
@@ -64,7 +68,7 @@ class Hypercorn(Quart):
         config.use_reloader = True
         scheme = "https" if config.ssl_enabled else "http"
 
-        self.logger.info("Running on {}://{} (CTRL + C to quit)".format(scheme, config.bind[0]))
+        cls.LOGGER.info("Running on {}://{} (CTRL + C to quit)".format(scheme, config.bind[0]))
         loop = None #asyncio.get_event_loop()
         if loop is not None:
             loop.set_debug(debug or False)

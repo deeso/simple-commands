@@ -1,3 +1,6 @@
+
+STANDARD_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+
 DEFAULT_PORT = 5000
 
 UBUNTU = 'ubuntu'
