@@ -1,15 +1,31 @@
 from .consts import *
+import os
 import paramiko
 import scp
 import io
+import time
 
 class Commands(object):
     @classmethod
-    def get_client(cls, host, **kargs):
+    def get_client(cls, host, retrys=3, **kargs):
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(host, **kargs)
-        return client
+        
+        keys = ['username', 'key_filename', 'password']
+        _kargs = {k:kargs.get(k) for k in keys if kargs.get(k, None)}
+        # print(_kargs)
+        success = False
+        while retrys > 0:
+            try:
+                client.connect(host, **_kargs)
+                success = True
+                break
+            except:
+                retrys += -1
+                time.sleep(10)
+                client = paramiko.SSHClient()
+                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        return client if success else None
 
     @classmethod
     def install_docker(cls, host, port=22, key_filename=None, password=None, username=UBUNTU, commands=DOCKER_SETUP_COMMANDS):
@@ -24,7 +40,6 @@ class Commands(object):
                 print(results['stdout'])
             output.append
 
-        print("executed set up commands for {} @ IP addresses: {}".format(len(commands), host))
         stdout.read()
         return output
 
@@ -37,17 +52,16 @@ class Commands(object):
         output = []
         client = cls.get_client(host=host, port=port, key_filename=key_filename, password=password, username=username, client=client)
         scp_client = scp.SCPClient(client.get_transport())
-        for dst, src in dst_src_buffer.items():
-            new_file = open(src, 'rb')
-            scp_client.putfo(new_file, dst)            
+        for dst, src in dsts_srcs.items():
+            scp_client.put(src, dst)            
         return True        
 
     @classmethod
-    def upload_bytes(cls, src_buffer:bytes, dst, host=None, port=22, key_filename=None, password=None, username=UBUNTU, commands=DOCKER_SETUP_COMMANDS):
+    def upload_bytes(cls, src_buffer:bytes, dst, host=None, port=22, key_filename=None, password=None, username=UBUNTU):
         return cls.upload_multi_bytes({dst:src_buffer}, host=host, port=port, key_filename=key_filename, password=password, username=username, client=client)
 
     @classmethod
-    def upload_multi_bytes(cls, dst_src_buffer:dict, , host, port=22, key_filename=None, password=None, username=UBUNTU, commands=DOCKER_SETUP_COMMANDS):
+    def upload_multi_bytes(cls, dst_src_buffer:dict, host, port=22, key_filename=None, password=None, username=UBUNTU):
         output = []
         client = cls.get_client(host=host, port=port, key_filename=key_filename, password=password, username=username, client=client)
         scp_client = scp.SCPClient(client.get_transport())
@@ -57,7 +71,7 @@ class Commands(object):
         return True
 
     @classmethod
-    def execute_commands(cls, commands, client=None, host=None, port=22, key_filename=None, password=None, username=UBUNTU, **cmd_kargs):
+    def execute_commands(cls, commands, client=None, host=None, port=22, key_filename=None, password=None, username=UBUNTU, debug=False, **cmd_kargs):
         if client is None and host:
             client = cls.get_client(host, port=port, key_filename=key_filename, password=password, username=username)
         elif client is None:
@@ -72,7 +86,6 @@ class Commands(object):
             if debug:
                 print(results['stdout'])
             output.append(results)
-        print("executed {} commands".format(len(commands)))
         return results
 
     @classmethod

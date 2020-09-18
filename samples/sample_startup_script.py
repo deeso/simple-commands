@@ -1,144 +1,128 @@
+from simple_commands.consts import *
 from simple_commands import boto
 from simple_commands import ssh
+from simple_commands.actions import *
 import json
 import os
 
 
-def build_setup_run_instance(instance_name, config, command_string_parameters=None):
-    #initialize the boto command
-    boto.Commands.set_config(**config)
-    instances, volume_results = boto.Commands.build_instance_region('us-east-2', instance_name, config, max_count=1)
-    instance_public_ip = boto.Commands.get_instance_public_ips([i for i in instances], **config)
+def handle_collector_config_update_and_start(instance_name, base_collector_config: str, collector_instances: dict, 
+                                             instance_public_ip: dict, command_format_args: dict, boto_config: dict):
 
-    key_filename = list(instances.values())[0]['KeyName']
-    # use the config to set up the hosts
-    instances_configs = {i['name']: i for i in config.get('instance_descriptions', [])}
-    instance_config = instances_configs.get(instance_name)
-    keypath = config.get('ssh_key_path', '')
-    key_file = os.path.join(keypath, key_filename)
+    base_collector_config = json.load(open('collector_config_sample.json'))
+    collector_config = base_collector_config.copy()
+    for k, v in command_format_args.items()
+        if k in collector_config:
+            collector_config[k] = v
 
-    all_activities = config.get('activities')
-    instance_actions = instances_configs.get('activities')
+    alt_collector_config = base_collector_config.copy()
+    for k, v in command_format_args.items():
+        if k in alt_collector_config:
+            alt_collector_config[k] = v
 
-    # variables for passwords and such
-    # variables for passwords and such
-    command_string_parameters = instance_config.get('command_string_parameters', []) if command_string_parameters is None \
-                                else command_string_parameters
-    cmd_format_args = {i['name']: i['value'] for i in command_string_parameters}
+    collector_host = command_format_args.get('collector_host')
+    alt_collector_host = command_format_args.get('alt_collector_host')
+    collector_token = command_format_args.get('collector_token')
 
-    # iterate over the actions and then execut them.
-    for action in instance_actions:
-        activity = all_activities.get(action)
-        atype = activity.get('type')
-        if atype == 'commands':
-            # create the command list
-            commands = [i.format(**cmd_format_args) for i in activity.get('commands', [])]
-            # TODO execute the commands
-            for instance_id, host in instance_public_ip.items():
-                ssh.Commands.execute_commands(commands, host=host, key_filename=key_file)        
-        elif atype == 'upload_files':
-            dst_src = {}
-            for scp_args in activity.get('files', []):
-                src = scp_args.get('src')
-                dst = scp_args.get('dst')
-                dst_src[dst] = src
-            # scp the files over
-            for instance_id, host in instance_public_ip.items():
-                ssh.Commands.upload_files(dst_src, host=host, key_filename=key_file)
-    return instance_public_ip
+    # primary collector
+    collector_config['global_hostname'] = collector_host
+    collector_config['collector_host'] = collector_host
+    collector_config['collector_alt_host'] = collector_alt_host
+    collector_config["collector_token"] = collector_token
+    collector_config["server_secret_key"] = collector_token
 
-def build_setup_run_instance_multi_regions_count(instance_name, config, regions, max_count, command_string_parameters=None):
-    #initialize the boto command
-    boto.Commands.set_config(**config)
-    all_instances = {}
-    all_volumes = {}
-    instance_id_key = {}
-    keypath = config.get('ssh_key_path', '')
-    for region in regions:
-        instances, volumes = boto.Commands.build_instance_region('us-east-2', instance_name, config, max_count=1)
-        all_volumes.update(volumes)
-        all_instances.update(instances)
-        key_filename = {k: os.path.join(keypath, v['KeyName']) for k,v in instances.items()}
-        instance_id_key.update(key_filename)
+    # alternate collector
+    alt_collector_config['global_hostname'] = collector_alt_host
+    alt_collector_config['collector_host'] = collector_alt_host
+    alt_collector_config['collector_alt_host'] = collector_ip
+    alt_collector_config["collector_token"] = collector_token
+    alt_collector_config["server_secret_key"] = collector_token
 
+    ssh.Commands.upload_bytes(collector_config, "collector_config.json", host=host, key_filename=key_filename)
+    ssh.Commands.upload_bytes(alt_collector_config, "collector_config.json", host=host, key_filename=key_filename)
+    activity_name = "startup", 
+    return perform_activity(instance_name, collector_instances, activity_name, instance_public_ip, boto_config, command_format_args)
 
-    instance_public_ip = boto.Commands.get_instance_public_ips([i for i in instances], **config)
-    # use the config to set up the hosts
-    instances_configs = {i['name']: i for i in config.get('instance_descriptions', [])}
-    instance_config = instances_configs.get(instance_name)
-    
+def handle_honeypot_config_update_and_start(instance_name, base_honeypot_config: str, collector_instances: dict, 
+                                             instance_public_ip: dict, command_format_args: dict, boto_config: dict):
 
-    all_activities = config.get('activities')
-    instance_actions = instances_configs.get('activities')
+    base_collector_config = json.load(open('collector_config_sample.json'))
+    collector_config = base_collector_config.copy()
+    for k, v in command_format_args.items()
+        if k in collector_config:
+            collector_config[k] = v
 
-    # variables for passwords and such
-    command_string_parameters = instance_config.get('command_string_parameters', []) if command_string_parameters is None \
-                                else command_string_parameters
+    alt_collector_config = base_collector_config.copy()
+    for k, v in command_format_args.items():
+        if k in alt_collector_config:
+            alt_collector_config[k] = v
 
-    cmd_format_args = {i['name']: i['value'] for i in command_string_parameters}
+    collector_host = command_format_args.get('collector_host')
+    alt_collector_host = command_format_args.get('alt_collector_host')
+    collector_token = command_format_args.get('collector_token')
 
-    # iterate over the actions and then execut them.
-    for action in instance_actions:
-        activity = all_activities.get(action)
-        atype = activity.get('type')
-        if atype == 'commands':
-            # create the command list
-            commands = [i.format(**cmd_format_args) for i in activity.get('commands', [])]
-            # TODO execute the commands
-            for instance_id, host in instance_public_ip.items():
-                key_file = instance_id_key[instance_id]
-                ssh.Commands.execute_commands(commands, host=host, key_filename=key_file)        
-        elif atype == 'upload_files':
-            dst_src = {}
-            for scp_args in activity.get('files', []):
-                src = scp_args.get('src')
-                dst = scp_args.get('dst')
-                dst_src[dst] = src
-            # scp the files over
-            for instance_id, host in instance_public_ip.items():
-                ssh.Commands.upload_files(dst_src, host=host, key_filename=key_file
+    ssh.Commands.upload_bytes(collector_config, "collector_config.json", host=host, key_filename=key_filename)
+    ssh.Commands.upload_bytes(alt_collector_config, "collector_config.json", host=host, key_filename=key_filename)
+    activity_name = "startup", 
+    return perform_activity(instance_name, collector_instances, activity_name, instance_public_ip, boto_config, command_format_args)
 
 
 # load configuration from json
-config = json.load(open('samples/boto.json'))
-instances_configs = {i['name']: i for i in config.get('instance_descriptions', [])}
-instance_config = instances_configs.get(instance_name)
+boto_config = json.load(open('internal-scripts/boto.json'))
+instances_configs = {i['name']: i for i in boto_config.get('instance_descriptions', [])}
+boto.Commands.set_config(**boto_config)
 
 # initialize the mongodb instance
 instance_name = "dockerhp-mongodb"
-command_string_parameters = instances_configs[instance_name].get('command_string_parameters', []) if command_string_parameters is None \
-                            else command_string_parameters
-instance_public_ip = build_setup_run_instance(instance_name, config)
-mongo_ip = list(instance_public_ip.values())[0]
+instance_config = instances_configs.get(instance_name)
+command_string_parameters = instances_configs['dockerhp-mongodb'].get('command_string_parameters', [])
+mdb_command_format_args = command_strings_to_dict(command_string_parameters)
 
-# initialize the mongodb instance
-# TODO update mongo ip and passwords in sample config file, upload them to collector instance
-# TODO update tokens in the collector config from the sample boto config
+# all_instances, instance_public_ip, all_volumes, setup_results = build_instance_and_setup
+mdb_ai, mdb_ipi, mdb_av, mdb_sr = build_instance_and_setup(instance_name, boto_config, command_format_args=mdb_command_format_args)
+mongo_host = list(mdb_ipi.values())[0]
+mongo_password = mdb_command_format_args['mongo_pass']
+
+# initialize the collector instance
 instance_name = "dockerhp-collector"
-_command_string_parameters = command_string_parameters
-command_string_parameters = instances_configs[instance_name].get('command_string_parameters', []) if command_string_parameters is None \
-                            else command_string_parameters
+command_string_parameters = instances_configs[instance_name].get('command_string_parameters', [])
+dc_command_format_args = command_strings_to_dict(command_string_parameters)
 
-_command_string_parameters.update(command_string_parameters)
-command_string_parameters = _command_string_parameters
-# TODO take ip address from mongo and update the config for collector
-instance_public_ip = build_setup_run_instance(instance_name, config, command_string_parameters=command_string_parameters)
-collector_ip = list(instance_public_ip.values())[0]
-command_string_parameters['collector_ip'] = collector_ip
+base_collector_config = "collector_config_sample.json"
+dc_ai, dc_ipi, dc_av, dc_sr = build_instance_and_setup(instance_name, boto_config, command_format_args=dc_command_format_args)
+
+collector_host = None
+alt_collector_host = None
+if len(dc_ipi) > 1:
+    collector_host, alt_collector_host = [ip for ip in dc_ipi.values()][:2]
+else:
+    collector_host = [ip for ip in dc_ipi.values()][0]
+    alt_collector_host = collector_host
+
+command_format_args['collector_host'] = collector_host
+command_format_args['alt_collector_host'] = alt_collector_host
+command_format_args['mongo_host'] = mongo_host
+command_format_args['mongo_password'] = mongo_host
+handle_collector_config_update_and_start(instance_name, base_collector_config, dc_ai, dc_ipi, dc_command_format_args, boto_config)
 
 
-# TODO update ip and passwords in sample config file, upload them to collector instance
-# TODO update tokens in the collector config from the sample boto config
-# TODO 
+
+
 instance_name = "dockerhp"
-_command_string_parameters = command_string_parameters
-command_string_parameters = instances_configs[instance_name].get('command_string_parameters', []) if command_string_parameters is None \
-                            else command_string_parameters
-
+dhp_cmd_args = command_strings_to_dict(instances_configs[instance_name].get('command_string_parameters', []))
 _command_string_parameters.update(command_string_parameters)
 command_string_parameters = _command_string_parameters
 # initialize the mongodb instance
-build_setup_run_instance_multi_regions_count(instance_name, config, command_string_parameters=command_string_parameters)
+dhp_all_instances, dhp_instance_public_ip, dhp_all_volumes = build_instance_and_setup_multi_regions_count(instance_name, boto_config, command_string_parameters=dc_command_string_parameters)
+
+# handle the configuration update
+collector_config = json.load(open('collector_config_sample.json'))
+
+
+
+
+
+
 
 
 

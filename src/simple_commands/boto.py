@@ -359,6 +359,7 @@ class Commands(object):
 
     @classmethod
     def build_instance_region(cls, region, instance_name, boto_config, max_count=None):
+        region = region if region else cls.DEFAULT_REGION
         instance_config = cls.get_instance_description(instance_name, boto_config)
         if len(instance_config) == 0:
             raise Exception("Incomplete instance configurations")
@@ -558,8 +559,8 @@ class Commands(object):
         rsp = ec2.describe_volumes()
         volumes = rsp.get('Volumes', {})
         for vinfo in volumes:
-            tags = volume.get('Tags', None)
-            volume_id = volume['VoluemId']
+            tags = vinfo.get('Tags', None)
+            volume_id = vinfo['VolumeId']
             if tags is None:
                 continue
             d_tags = {tag.get('Key', ''):tag.get('Value', '') for tag in tags }
@@ -616,11 +617,11 @@ class Commands(object):
             return volumes
 
         ec2 = cls.get_ec2(**kargs)
-        try:
-            vids = [i for i in volumes]
-            ec2.delete_volumes(DryRun=dry_run, VolumeIds=volumes)
-        except:
-            raise
+        for vid in volumes:
+            try:
+                ec2.delete_volume(DryRun=dry_run, VolumeId=vid)
+            except:
+                raise
 
         return volumes
 

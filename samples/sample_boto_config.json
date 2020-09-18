@@ -17,7 +17,25 @@
          "regions": ["us-east-2"],
          "multi_region": true,
          "max_count": 3,
-         "username": "ubuntu"
+         "username": "ubuntu",
+         "command_string_parameters": [
+            {"name":"username", "value":"ubuntu"},
+            {"name":"container_name", "value":"dockerhp"},
+
+            {"name":"server_secret_key",  "value":null},
+            {"name":"global_port",  "value":5000},
+            {"name":"global_hostname",  "value":null},
+
+            {"name":"collector",  "value":true},
+            {"name":"collector_token",  "value":null},
+            {"name":"collector_host",  "value":null},
+            {"name":"collector_alt_host",  "value":null}
+
+        ],
+         "activities": {
+            "setup": {"description":"", "steps":["setup_dockerhp"]},
+            "startup":{"description":"", "steps":["start_container"]}
+         }
         },
         {"name": "dockerhp-collector",
          "instance_type": "t2.micro",
@@ -31,16 +49,37 @@
          "max_count": 1,
          "username": "ubuntu",
          "command_string_parameters": [
+            {"name":"username", "value":"ubuntu"},
+            {"name":"mongo",  "value":true},
             {"name":"mongo_user",  "value":"mongo_user"},
-            {"name":"mongo_password", "value":"fill_me_in"},
-            {"name":"container_name", "value":"collector_mongo"}
+            {"name":"mongo_host",  "value":null},
+            {"name":"mongo_pass", "value":"fill_me_in"},
+            {"name":"mongo_user",  "value":"mongo_user"},
+            
+            {"name":"server_secret_key",  "value":null},
+            {"name":"global_port",  "value":5000},
+            {"name":"global_hostname",  "value":null},
+
+            {"name":"collector",  "value":false},
+            {"name":"collector_token",  "value":null},
+            {"name":"collector_host",  "value":null},
+            {"name":"collector_alt_host",  "value":null},
+
+            {"name":"wbx_webhook", "value":null},
+            {"name":"wbx", "value":true},
+            
+            {"name":"slack_webhook", "value":null},
+            {"name":"slack", "value":true}
          ],
-         "activities": ["setup_collector", "upload_collector_configs", "start_container"]
+         "activities": {
+            "setup": {"description":"", "steps":["setup_collector"]},
+            "starup":{"description":"", "steps":["start_collector"]}
+         }
         },
         {"name": "dockerhp-mongodb",
          "instance_type": "t2.micro",
          "security_groups": ["remote-ssh-access", "dockerhp-mongodb-access"],
-         "base_base_keyname": "dockerhp-collector",
+         "base_keyname": "dockerhp-collector",
          "keyname_fmt": "{region}-{base_keyname}.pem",
          "recreate_keypair": false,
          "volumes": ["dockerhp-mongodb"],
@@ -56,11 +95,15 @@
          "max_count": 1,
          "username": "ubuntu",
          "command_string_parameters": [
+            {"name":"username", "value":"ubuntu"},
             {"name":"mongo_user",  "value":"mongo_user"},
-            {"name":"mongo_password", "value":"fill_me_in"},
+            {"name":"mongo_pass", "value":"fill_me_in"},
             {"name":"container_name", "value":"collector_mongo"}
          ],
-         "activities": ["setup_mongodb", "upload_mongodb_configs", "start_container"]
+         "activities":{ 
+            "setup": {"description":"", "steps":["setup_mongodb", "upload_mongodb_configs", "start_container"]}
+         }
+         
      }
     ],
     "tag_specs": [
@@ -182,8 +225,8 @@
         "eu-west-2": "ami-04edc9c2bfcf9a772",
         "eu-west-3": "ami-03d4fca0a9ced3d1f"
     },
-    "activities":{
-        "setup_mongodb": {"type": "command", 
+    "actions":{
+        "setup_mongodb": {"type": "commands", 
             "commands": [
                 "sudo mkfs.ext4 /dev/xvdf",
                 "sudo mkdir -p /opt/data/mongo",
@@ -192,14 +235,14 @@
                 "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -",
                 "sudo add-apt-repository \"deb [arch=amd64] https://download.docker.com/linux/ubuntu bionic stable\"",
                 "sudo apt update && sudo apt install -y docker-ce docker-compose",
-                "sudo usermod -aG docker ${USER}",
-                "echo 'MONGO_INITDB_ROOT_USERNAME={mongo_username}' >> .env",
-                "echo 'MONGO_INITDB_ROOT_PASSWORD={mongo_password}' >> .env",
+                "echo 'MONGO_INITDB_ROOT_USERNAME={mongo_user}' >> .env",
+                "echo 'MONGO_INITDB_ROOT_PASSWORD={mongo_pass}' >> .env",
                 "mkdir ssl",
-                "mkdir dockerfiles"
+                "mkdir dockerfiles",
+                "sudo usermod -aG docker {username}"
             ]
         },
-        "setup_collector": {"type": "command", 
+        "setup_collector": {"type": "commands", 
             "commands": [
                 "sudo apt update && sudo apt install -y apt-transport-https ca-certificates curl software-properties-common git python3-pip",
                 "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -",
@@ -210,25 +253,25 @@
                 "mkdir dockerfiles"
             ]
         },
-        "start_container": {"type": "command", 
+        "start_container": {"type": "commands", 
             "commands": [
                 "docker-compose up -d {container_name}"
             ]
         },
         "upload_mongodb_configs": {"type": "upload_files", 
             "files":[
-                {"src": "ssl/mongodb.pem", "dst": "./ssl/mongodb.pem"},
-                {"src": "ssl/ca-dockerhp-collector.crt", "dst": "./ssl/ca-dockerhp-collector.crt"},
-                {"src": "ssl/ca-dockerhp-collector.crt", "dst": "./ssl/ca-dockerhp-collector.crt"},
-                {"src": "dockerfiles/mongodb", "dst": "./dockerfiles/mongodb"},
+                {"src": "ssl/mongodb.pem", "dst": "ssl/mongodb.pem"},
+                {"src": "ssl/ca-dockerhp-collector.crt", "dst": "ssl/ca-dockerhp-collector.crt"},
+                {"src": "ssl/ca-dockerhp-collector.crt", "dst": "ssl/ca-dockerhp-collector.crt"},
+                {"src": "dockerfiles/mongodb", "dst": "dockerfiles/mongodb"},
                 {"src": "docker-compose.yaml", "dst": "docker-compose.yaml"}
         ]},
         "upload_collector_configs": {"type": "upload_files", 
             "files":[
-                {"src": "ssl/collector-cert.pem", "dst": "./ssl/collector-cert.pem"},
-                {"src": "ssl/collector-key.pem", "dst": "./ssl/collector-key.pem"},
-                {"src": "ssl/ca-dockerhp-collector.crt", "dst": "./ssl/ca-dockerhp-collector.crt"},
-                {"src": "dockerfiles/collector", "dst": "./dockerfiles/collector"},
+                {"src": "ssl/collector-cert.pem", "dst": "ssl/collector-cert.pem"},
+                {"src": "ssl/collector-key.pem", "dst": "ssl/collector-key.pem"},
+                {"src": "ssl/ca-dockerhp-collector.crt", "dst": "ssl/ca-dockerhp-collector.crt"},
+                {"src": "dockerfiles/collector", "dst": "dockerfiles/collector"},
                 {"src": "docker-compose.yaml", "dst": "docker-compose.yaml"}
         ]}
     }
