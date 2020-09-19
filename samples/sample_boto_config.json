@@ -242,7 +242,9 @@
                 "sudo usermod -aG docker {username}"
             ]
         },
-        "setup_collector": {"type": "commands", 
+        "setup_collector": {"type": "commands",
+            "pre_wait": 20.0,
+            "post_wait":0.0,
             "commands": [
                 "sudo apt update && sudo apt install -y apt-transport-https ca-certificates curl software-properties-common git python3-pip",
                 "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -",
@@ -252,6 +254,7 @@
                 "mkdir ssl",
                 "mkdir dockerfiles"
             ]
+            
         },
         "start_container": {"type": "commands", 
             "commands": [

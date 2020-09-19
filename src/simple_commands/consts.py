@@ -1,4 +1,4 @@
-
+HIBERNATEABLE = ["m3",  "m4",  "m5",  "c3",  "c4",  "c5",  "r3",  "r4", "r5"]
 STANDARD_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 
 DEFAULT_PORT = 5000

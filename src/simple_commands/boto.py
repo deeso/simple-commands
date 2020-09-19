@@ -1,12 +1,17 @@
 import os
 import boto3
 from .consts import *
+from .util import *
+import traceback
 import time
 
 class Commands(object):
     AWS_SECRET_ACCESS_KEY = None
     AWS_ACCESS_KEY_ID = None
     DEFAULT_REGION='us-east-2'
+    DEFAULT_KMS_ID = None
+    DEFAULT_KMS_ALIAS = None
+    DEFAULT_KMS_ARN = None
     REGIONS = [DEFAULT_REGION]
     LOGGER = get_stream_logger(__name__ + '.Commands')
 
@@ -179,6 +184,9 @@ class Commands(object):
         cls.AWS_ACCESS_KEY_ID = kargs.get('aws_access_key_id', None)
         cls.AWS_SECRET_ACCESS_KEY= kargs.get('aws_secret_access_key', None)
         cls.REGIONS = kargs.get('regions', cls.REGIONS) 
+        cls.DEFAULT_KMS_ID = kargs.get('aws_key_id', None)
+        cls.DEFAULT_KMS_ALIAS = kargs.get('aws_key_alias', None)
+        cls.init_kms_defaults(**kargs)
 
     @classmethod
     def create_tags_keywords(cls, *extra_args):
@@ -196,7 +204,7 @@ class Commands(object):
     @classmethod
     def get_ec2(cls, ec2=None, region=DEFAULT_REGION, aws_secret_access_key=None, aws_access_key_id=None, **kargs):
         if ec2 is None:
-            cls.LOGGER.debug("Creating ec2 client for {} in {}".format(region, aws_access_key_id))
+            # cls.LOGGER.debug("Creating ec2 client for {} in {}".format(region, aws_access_key_id))
             aws_secret_access_key = aws_secret_access_key if aws_secret_access_key else cls.AWS_SECRET_ACCESS_KEY
             aws_access_key_id = aws_access_key_id if aws_access_key_id else cls.AWS_ACCESS_KEY_ID
             ec2 = boto3.client('ec2', 
@@ -204,6 +212,145 @@ class Commands(object):
                            aws_access_key_id=aws_access_key_id, 
                            aws_secret_access_key=aws_secret_access_key)
         return ec2
+
+    @classmethod
+    def get_kws_key(cls, kms=None, region=DEFAULT_REGION, aws_secret_access_key=None, aws_access_key_id=None,
+                    key_name=None, key_id=None, **kargs):
+
+        if key_name is None and key_id is None:
+            if cls.DEFAULT_KMS_ID:
+                return cls.DEFAULT_KMS_ID
+
+            kms = cls.get_kms(region=region, aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key)
+        return kms
+
+    @classmethod
+    def init_kms_defaults(cls, **kargs):
+        kms = cls.get_kms(**kargs)
+        aliases = kms.list_aliases()
+        rsp = kms.list_keys()
+        all_keys = {k['KeyId']: k['KeyArn'] for k in rsp['Keys']}
+        alias_name = cls.DEFAULT_KMS_ALIAS if cls.DEFAULT_KMS_ALIAS else 'alias/aws/ebs'
+        alias_key_id = cls.DEFAULT_KMS_ID
+        if alias_key_id is not None and alias_name is not None:
+            return kms.describe_key(KeyId=cls.DEFAULT_KMS_ID)
+        if cls.DEFAULT_KMS_ID:
+            cls.DEFAULT_KMS_ALIAS = "None"
+            for alias in aliases['Aliases']:
+                if 'TargetKeyId' in alias and alias['TargetKeyId'] == alias_key_id:
+                    cls.DEFAULT_KMS_ID = alias['TargetKeyId']
+                    cls.DEFAULT_KMS_ALIAS = alias['AliasName']
+                    break
+        else:
+            for alias in aliases['Aliases']:
+                if alias['AliasName'] == alias_name:
+                    cls.DEFAULT_KMS_ID = alias['TargetKeyId']
+                    cls.DEFAULT_KMS_ALIAS = alias['AliasName']
+                    break
+        if cls.DEFAULT_KMS_ID is None:
+            cls.DEFAULT_KMS_ID = list(all_keys.keys())[0]
+            cls.DEFAULT_KMS_ALIAS = "None"
+            cls.DEFAULT_KMS_ARN = all_keys[cls.DEFAULT_KMS_ID]
+        else:
+            cls.DEFAULT_KMS_ARN = all_keys[cls.DEFAULT_KMS_ID]
+
+    @classmethod
+    def get_default_kms_key(cls, **kargs):
+        if cls.DEFAULT_KMS_ID is None:
+            cls.init_kms_defaults(**karg)
+        return {'alias':cls.DEFAULT_KMS_ALIAS, 
+                'keyarn':cls.DEFAULT_KMS_ARN, 
+                'keyid':cls.DEFAULT_KMS_ID}
+
+    @classmethod
+    def check_kms_key(cls, key_arn=None, key_id=None, **kargs):
+        cls.LOGGER.debug("checking key: arn={}, id={}".format(key_arn, key_id))
+        info = cls.get_kms_key(key_arn=key_arn, key_id=key_id, **kargs)
+        return not info is None
+
+    @classmethod
+    def create_kms_key(cls, tags=None, **kargs):
+        kms = cls.get_kms(**kargs)
+        cls.LOGGER.info("creating a new kms key".format(key_arn, key_id))
+        # TODO add tags
+        _kargs = {}
+        if tags:
+            _kargs['Tags'] = tags
+
+        x = kms.create_key(**tags)
+        y = x['KeyMetadata']
+        return {'alias':"None", 
+                'keyarn':y['Arn'], 
+                'keyid':y['KeyId']}
+
+    @classmethod
+    def get_kms_key(cls, key_arn=None, key_id=None, create=False, **kargs):
+        cls.LOGGER.info("geting a kms key: arn={}, id={} create={}".format(key_arn, key_id, create))
+        if key_arn is None and key_id is None and create:
+            return cls.create_kms_key(**kargs)
+        if key_id and cls.DEFAULT_KMS_ID and cls.DEFAULT_KMS_ID == key_id or \
+           key_arn and cls.DEFAULT_KMS_ARN and cls.DEFAULT_KMS_ARN == key_arn:
+            return cls.get_default_kms_key(**kargs)
+        if key_id is None and key_arn is None:
+            return cls.get_default_kms_key(**kargs)
+        kms = cls.get_kms(**kargs)
+        aliases = kms.list_aliases()
+        rsp = kms.kms.list_keys()
+        setit = False
+        if key_id:
+            all_keys = {k['KeyId']: k['KeyArn'] for k in rsp['Keys']}
+            key_arn = all_keys.get(key_id, None)
+            setit = key_id in all_keys
+        else:
+            all_keys = {k['KeyArn']:k['KeyId'] for k in rsp['Keys']}
+            key_id = all_keys.get(key_arn, None)
+            setit = key_arn in all_keys
+        
+        if setit:
+            return {'alias':"None", 
+                    'keyarn':key_arn, 
+                    'keyid':key_id}
+        elif create:
+            return cls.create_key(**kargs)
+        cls.LOGGER.info("Failed to get a kms key: arn={}, id={} create={}".format(key_arn, key_id, create))
+        return None
+
+    @classmethod
+    def get_default_aws_key_id(cls, **kargs):
+        kms = cls.get_kms(region=region, aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key)
+        aliases = kms.list_aliases()
+
+        alias_name = cls.DEFAULT_KMS_ALIAS if cls.DEFAULT_KMS_ALIAS else 'alias/aws/ebs'
+        alias_key_id = cls.DEFAULT_KMS_ID
+        if alias_key_id is not None and alias_name is not None:
+            return kms.describe_key(KeyId=cls.DEFAULT_KMS_ID)
+        if cls.DEFAULT_KMS_ID:
+            for alias in aliases['Aliases']:
+                if 'TargetKeyId' in alias and alias['TargetKeyId'] == alias_key_id:
+                    cls.DEFAULT_KMS_ID = alias['TargetKeyId']
+                    cls.DEFAULT_KMS_ALIAS = alias['AliasName']
+                    break
+        else:
+            for alias in aliases['Aliases']:
+                if alias['AliasName'] == alias_name:
+                    cls.DEFAULT_KMS_ID = alias['TargetKeyId']
+                    cls.DEFAULT_KMS_ALIAS = alias['AliasName']
+                    break
+        if cls.DEFAULT_KMS_ID:
+            return kms.describe_key(KeyId=cls.DEFAULT_KMS_ID)
+        return None
+
+    @classmethod
+    def get_kms(cls, kms=None, region=DEFAULT_REGION, aws_secret_access_key=None, aws_access_key_id=None, **kargs):
+        if kms is None:
+            cls.LOGGER.debug("Creating ec2 client for {} in {}".format(region, aws_access_key_id))
+            aws_secret_access_key = aws_secret_access_key if aws_secret_access_key else cls.AWS_SECRET_ACCESS_KEY
+            aws_access_key_id = aws_access_key_id if aws_access_key_id else cls.AWS_ACCESS_KEY_ID
+            kms = boto3.client('kms', 
+                           region, 
+                           aws_access_key_id=aws_access_key_id, 
+                           aws_secret_access_key=aws_secret_access_key)
+        return kms
 
     @classmethod
     def delete_key_pair(cls, keyname, **kargs):
@@ -287,7 +434,9 @@ class Commands(object):
 
     @classmethod
     def create_instances(cls, key_name, max_count, image_id, instance_type, security_groups, 
-                         tag_specifications, availability_zone, **kargs):
+                         tag_specifications, availability_zone, do_hibernate=False, device_name='/dev/sda1', 
+                         delete_on_termination=True, volume_size=20, volumetype='gp2', encrypted=False,
+                         kms_key_id=None, kms_arn_id=None, create_volume=True, snapshotid=None, **kargs):
         
         ec2 = cls.get_ec2(**kargs)
         placement = None
@@ -295,7 +444,43 @@ class Commands(object):
         if availability_zone is not None:
             placement = {'AvailabilityZone': availability_zone}
         
-        _kargs = {
+        _kargs = {}
+        block_info = None
+        ebs = {
+            'Encrypted': encrypted
+        }
+        if do_hibernate and any([instance_type.find(it) == 0 for i in HIBERNATEABLE]):
+            _kargs['HibernationOptions'] = {'Configured': True}
+            ebs['Encrypted'] = True
+
+        if create_volume:
+            ebs.update({
+                'DeleteOnTermination': delete_on_termination,
+                'VolumeSize': volume_size,
+                'VolumeType': volumetype,
+            })
+            block_info = { 
+                'DeviceName': device_name,
+                'Ebs': ebs 
+            }
+            if ebs['Encrypted']:
+                info = cls.get_kms_key(kms_key_id=kms_key_id, key_arn=kms_key_arn, create=True, tags=tags, **kargs)
+                keyid = None
+                if info is None:
+                    keyid = info['keyid']
+                ebs.update({
+                    'KmsKeyId': keyid
+                })
+            if ebs['Encrypted'] and ebs['KmsKeyId'] is None:
+                cls.LOGGER.critical("No valid key used for the encrypted volume")
+                raise Exception("No valid key used for the encrypted volume")
+
+            if snapshotid:
+                ebs['SnapshotId'] = snapshotid
+                del ebs['VolumeSize']
+            _kargs['BlockDeviceMappings'] = [block_info,]
+
+        _kargs.update({
             "DryRun":False, 
             "MinCount":1, 
             "MaxCount":max_count, 
@@ -304,8 +489,9 @@ class Commands(object):
             "InstanceType":instance_type, 
             "SecurityGroupIds":security_groups, 
             "TagSpecifications":tag_specifications,
-            "Placement":placement
-        }
+            "Placement":placement,
+        })
+        
         del_keys = [i for i,v  in _kargs.items() if v is None ]
         for k in del_keys:
             del _kargs[k]
@@ -340,7 +526,7 @@ class Commands(object):
     @classmethod
     def wait_for_instances(cls, instance_ids, **kargs):
         ec2 = cls.get_ec2(**kargs)
-        instance_statuses = None
+        loaded_instances = None
         cls.LOGGER.info("Waiting for {} instances to be reachable".format(len(instance_ids)))
         while True:
             loaded_instances = cls.check_for_instances_up(instance_ids)
@@ -351,14 +537,16 @@ class Commands(object):
             else:
                 time.sleep(10.0)
         cls.LOGGER.info("{} instances are available".format(len(instance_ids)))
-        return instance_statuses
+        return cls.get_instances(instance_ids=[i for i in loaded_instances])
 
     @classmethod
     def wait_for_volumes(cls, volume_ids, **kargs):
         ec2 = cls.get_ec2(**kargs)
         statuses = None
-        cls.LOGGER.info("{} volumes to be available".format(len(volume_ids)))
+        cls.LOGGER.info("Waiting for {} volumes to be available".format(len(volume_ids)))
         while True:
+            if len(volume_ids) == 0:
+                break
             # print(instance_ids)
             rsp = ec2.describe_volumes(VolumeIds=volume_ids)
             # print(rsp)
@@ -543,15 +731,18 @@ class Commands(object):
         return instances_completed_loading
 
     @classmethod
+    def extract_public_ips(cls, instance_infos):
+        instance_to_ip = {k['InstanceId']: k.get('PublicIpAddress', '') for k in instance_infos}
+        return instance_to_ip
+
+    @classmethod
     def get_instance_public_ips(cls, instance_ids, **kargs):
         ec2 = cls.get_ec2(**kargs)
         results = ec2.describe_instances(InstanceIds=instance_ids)
         instance_infos = []
         for k in results['Reservations']:
             instance_infos = instance_infos + k['Instances']
-        
-        instance_to_ip = {k['InstanceId']: k.get('PublicIpAddress', '') for k in instance_infos}
-        return instance_to_ip
+        return cls.extract_public_ips(instance_infos)
 
     @classmethod
     def find_relevant_instances(cls, target_tags: dict=None, **kargs):
@@ -595,6 +786,36 @@ class Commands(object):
         return relevant_volumes
 
     @classmethod
+    def get_instances(cls, instance_id=None, instance_ids=None, target_tags=None, **kargs):
+        ec2 = cls.get_ec2(**kargs)
+        if instance_ids is None:
+            instance_ids = []
+
+        if instance_id not in instance_ids:
+            instance_ids.append(instance_id)
+
+        instances = {}
+        if len(instance_ids) == 0:
+            r = ec2.describe_instances(InstanceIds=instances)
+            instance_infos = []
+            for k in r['Reservations']:
+                instance_infos = instance_infos + k['Instances']
+            instances = {k['InstanceId']: k for k in instance_infos }
+        if target_tags:
+            if not 'ec2' in kargs:
+                kargs['ec2'] = ec2
+            x = find_relevant_instances(target_tags=target_tags, **kargs)
+            if len(x) > 0:
+                r = ec2.describe_instances(InstanceIds=[i for i in x])
+                instance_infos = []
+                for k in r['Reservations']:
+                    instance_infos = instance_infos + k['Instances']
+                instances.update({k['InstanceId']: k for k in instance_infos })
+        return instances
+
+
+
+    @classmethod
     def find_relevant_instances_multiple_regions(cls, target_tags: dict=None, regions=REGIONS, **kargs):
         target_tags = target_tags if target_tags else {}
         relevant_instances = []
@@ -615,38 +836,57 @@ class Commands(object):
         return relevant_instances
 
     @classmethod
-    def terminate_relevant_instances(cls, target_tags: dict=None, dry_run=True, **kargs):
-        if target_tags is None or len(target_tags) == 0:
+    def terminate_relevant_instances(cls, instance_ids=None, instance_id=None, target_tags: dict=None, dry_run=True, **kargs):
+        if instance_ids is None:
+            instance_ids = []
+
+        if instance_id not in instance_ids:
+            instance_ids.append(instance_id)
+
+        if len(instance_ids) == 0 and (target_tags is None or len(target_tags) == 0):
+            cls.LOGGER.critical("WARNING: Must provide tags to filter out instances, or this will destroy the environment")
             raise Exception("Must provide tags to filter out instances, or this will destroy the environment")
 
-        instances = cls.find_relevant_instances(target_tags=target_tags, **kargs)
-        if len(instances) == 0:
+
+        instances = cls.get_instances(instance_ids=instance_id, target_tags=target_tags, **kargs)
+        if len(instances) == 0 and len(instance_ids) == 0:
             return instances
 
         ec2 = cls.get_ec2(**kargs)
+        instance_ids = [i for i in instances]
         try:
-            instance_ids = [i for i in instances]
+            cls.LOGGER.debug("Attempting to terminate {} instances.".format(len(instance_ids)))
             ec2.terminate_instances(DryRun=dry_run, InstanceIds=instance_ids)
+            cls.LOGGER.info("Terminated {} instances.".format(len(instance_ids)))
+        except KeyboardInterrupt:
+            cls.LOGGER.error("Failed to terminate {} instances.".format(len(instance_ids)))
         except:
-            raise
+            cls.LOGGER.error("{}".format(traceback.format_exc()))
 
         return instances
 
     @classmethod
     def delete_relevant_volumes(cls, target_tags: dict=None, dry_run=True, **kargs):
         if target_tags is None or len(target_tags) == 0:
+            cls.LOGGER.critical("WARNING: Must provide tags to filter out instances, or this will destroy the environment")
             raise Exception("Must provide tags to filter out instances, or this will destroy the environment")
 
         volumes = cls.find_relevant_volumes(target_tags=target_tags, **kargs)
         if len(volumes) == 0:
+            cls.LOGGER.info("No volumes found.")
             return volumes
 
         ec2 = cls.get_ec2(**kargs)
         for vid in volumes:
             try:
+                cls.LOGGER.debug("Attempting to delete volume: {}.".format(vid))
                 ec2.delete_volume(DryRun=dry_run, VolumeId=vid)
+                cls.LOGGER.info("Deleted volume: {}.".format(vid))
+            except KeyboardInterrupt:
+                break
             except:
-                raise
+                cls.LOGGER.error("Failed to delete volume: {}.".format(vid))
+                cls.LOGGER.error("{}".format(traceback.format_exc()))
 
         return volumes
 
@@ -667,3 +907,93 @@ class Commands(object):
             results = cls.delete_relevant_volumes(dry_run=dry_run, **kargs)
             relevant_volumes.append({'region': region, 'volumes': results})
         return relevant_volumes
+
+    @classmethod
+    def stop_relevant_instances(cls, instance_ids=None, instance_id=None, target_tags: dict=None, dry_run=True, **kargs):
+        if instance_ids is None:
+            instance_ids = []
+
+        if instance_id not in instance_ids:
+            instance_ids.append(instance_id)
+
+        if len(instance_ids) == 0 and (target_tags is None or len(target_tags) == 0):
+            cls.LOGGER.critical("WARNING: Must provide tags to filter out instances, or this will destroy the environment")
+            raise Exception("Must provide tags to filter out instances, or this will destroy the environment")
+
+
+        instances = cls.get_instances(instance_ids=instance_id, target_tags=target_tags, **kargs)
+        if len(instances) == 0 and len(instance_ids) == 0:
+            return instances
+
+        ec2 = cls.get_ec2(**kargs)
+        instance_ids = [i for i in instances]
+        try:
+            cls.LOGGER.debug("Attempting to stop {} instances: {}.".format(len(instance_ids)))
+            ec2.stop_instances(DryRun=dry_run, InstanceIds=instance_ids)
+            cls.LOGGER.info("Stopped instace: {}.".format(vid))
+        except KeyboardInterrupt:
+            cls.LOGGER.error("Failed to stop {} instances.".format(len(instance_ids)))
+        except:
+            cls.LOGGER.error("{}".format(traceback.format_exc()))
+
+        return instances
+
+    @classmethod
+    def reboot_relevant_instances(cls, instance_ids=None, instance_id=None, target_tags: dict=None, dry_run=True, **kargs):
+        if instance_ids is None:
+            instance_ids = []
+
+        if instance_id not in instance_ids:
+            instance_ids.append(instance_id)
+
+        if len(instance_ids) == 0 and (target_tags is None or len(target_tags) == 0):
+            cls.LOGGER.critical("WARNING: Must provide tags to filter out instances, or this will destroy the environment")
+            raise Exception("Must provide tags to filter out instances, or this will destroy the environment")
+
+
+        instances = cls.get_instances(instance_ids=instance_id, target_tags=target_tags, **kargs)
+        if len(instances) == 0 and len(instance_ids) == 0:
+            return instances
+
+        ec2 = cls.get_ec2(**kargs)
+        instance_ids = [i for i in instances]
+        try:
+            cls.LOGGER.debug("Attempting to reboot {} instances: {}.".format(len(instance_ids)))
+            ec2.reboot_instances(DryRun=dry_run, InstanceIds=instance_ids)
+            cls.LOGGER.info("Rebooted instace: {}.".format(vid))
+        except KeyboardInterrupt:
+            cls.LOGGER.error("Failed to reboot {} instances.".format(len(instance_ids)))
+        except:
+            cls.LOGGER.error("{}".format(traceback.format_exc()))
+
+        return instances
+
+    @classmethod
+    def start_relevant_instances(cls, instance_ids=None, instance_id=None, target_tags: dict=None, dry_run=True, **kargs):
+        if instance_ids is None:
+            instance_ids = []
+
+        if instance_id not in instance_ids:
+            instance_ids.append(instance_id)
+
+        if len(instance_ids) == 0 and (target_tags is None or len(target_tags) == 0):
+            cls.LOGGER.critical("WARNING: Must provide tags to filter out instances, or this will destroy the environment")
+            raise Exception("Must provide tags to filter out instances, or this will destroy the environment")
+
+
+        instances = cls.get_instances(instance_ids=instance_id, target_tags=target_tags, **kargs)
+        if len(instances) == 0 and len(instance_ids) == 0:
+            return instances
+
+        ec2 = cls.get_ec2(**kargs)
+        instance_ids = [i for i in instances]
+        try:
+            cls.LOGGER.debug("Attempting to start {} instances: {}.".format(len(instance_ids)))
+            ec2.start_instances(DryRun=dry_run, InstanceIds=instance_ids)
+            cls.LOGGER.info("Started instace: {}.".format(vid))
+        except KeyboardInterrupt:
+            cls.LOGGER.error("Failed to start {} instances.".format(len(instance_ids)))
+        except:
+            cls.LOGGER.error("{}".format(traceback.format_exc()))
+
+        return instances

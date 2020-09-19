@@ -1,3 +1,6 @@
+import collections
+import collections.abc
+import logging
 import os
 import tempfile
 import socket
@@ -39,7 +42,7 @@ def get_external_ip():
     return ext_ip
 
 
-def get_stream_logger(name, level=level.DEBUG, lformat=STANDARD_FORMAT):
+def get_stream_logger(name, level=logging.DEBUG, lformat=STANDARD_FORMAT):
     # create logger
     logger = logging.getLogger(name)
     logger.setLevel(level)
@@ -62,3 +65,20 @@ def reset_logger_level(logger, level):
     for handler in logger.handlers:
         handler.setLevel(level)
     return logger
+
+def merge_secrets(base_file_json, secrets_json_file):
+    base_dict = json.load(open(base_file_json))
+    secrets_dict = json.load(open(secrets_json_file))
+    return merge_dicts(base_dict, secrets_dict) 
+
+# https://stackoverflow.com/questions/3232943/update-value-of-a-nested-dictionary-of-varying-depth
+def merge_dicts(orig_dict, new_dict):
+    for key, val in new_dict.iteritems():
+        if isinstance(val, collections.Mapping):
+            tmp = update(orig_dict.get(key, { }), val)
+            orig_dict[key] = tmp
+        elif isinstance(val, list):
+            orig_dict[key] = (orig_dict.get(key, []) + val)
+        else:
+            orig_dict[key] = new_dict[key]
+    return orig_dict

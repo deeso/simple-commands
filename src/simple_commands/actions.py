@@ -9,7 +9,6 @@ import os
 import logging
 ACTION_LOGGER = get_stream_logger(__name__)
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s :: %(levelname)s :: %(message)s')
 command_strings_to_dict = lambda x: {i['name']: i['value'] for i in x}
 
 def perform_activity(instance_name, all_instances, activity_name, 
@@ -29,14 +28,14 @@ def perform_activity(instance_name, all_instances, activity_name,
         key_filename = list(all_instances.values())[0]['KeyName']
         key_file = os.path.join(keypath, key_filename)
         ssh_reqs[iid] = {'key_file': key_file, 'host': instance_public_ip[iid], 'username': username}
-    ACTION_LOGGER.info("Performing {} for {} ({} instances)".format(activity_name, instance_name, len(instances)))
+    ACTION_LOGGER.info("Performing {} for {} ({} instances)".format(activity_name, instance_name, len(all_instances)))
     return perform_instance_activities(instance_name, all_instances, activity_name,  activity, 
-                                       all_actions, ssh_reqs, command_format_args)
+                                       all_actions, ssh_reqs, command_format_args, boto_config)
 
 
 def perform_instance_activities(instance_name:str, all_instances:dict, activity_name:str, 
                                 activity: dict, all_actions:dict, ssh_reqs: dict,
-                                command_format_args):
+                                command_format_args, boto_config):
     # iterate over the actions and then execut them.
     steps = activity.get('steps')
     activity_results = {'instance_name':instance_name,
@@ -49,14 +48,14 @@ def perform_instance_activities(instance_name:str, all_instances:dict, activity_
     for action in steps:
         activity = all_actions.get(action)
         atype = activity.get('type')
-
+        pre_wait = activity.get('pre_wait', 0.0)
+        time.sleep(pre_wait)
         if atype == 'commands':
             # create the command list
             commands = [i.format(**command_format_args) for i in activity.get('commands', [])]
             aresults = {'name': action,
                         'type':'commands', 
                         "commands": commands, "results":[], 
-                        "results": []
                         }
             # TODO execute the commands
             for instance_id, ssh_req in ssh_reqs.items():
@@ -83,9 +82,11 @@ def perform_instance_activities(instance_name:str, all_instances:dict, activity_
                 outcome = {'instance_id': instance_id, "host": host, 'result': result}
                 aresults["results"].append(outcome)
             activity_results['step_results'][action] = aresults
-        else:
+        elif atype == "boto":
             aresults = {'name': action,
-                        'atype':atype,  
+                        'atype':atype,
+                        "commands": activity.get('commands', []),
+                        "command_parameters": activity.get('command_parameters', []),
                         "results":[]}
             # scp the files over
             for instance_id, ssh_req in ssh_reqs.items():
@@ -94,6 +95,18 @@ def perform_instance_activities(instance_name:str, all_instances:dict, activity_
                 outcome = {'instance_id': instance_id, "host": host, 'result': "Unsupported action"}
                 aresults["results"].append(outcome)
             activity_results['step_results'].append(aresults)
+        else:
+            aresults = {'name': action,
+                        'atype':atype,  
+                        "results":[]}
+            for instance_id, ssh_req in ssh_reqs.items():
+                host, key_file, username = unpack_ssh_reqs(ssh_req)
+                ACTION_LOGGER.debug("Invalid activity {}:{} for {}@{} with {}".format(activity_name, atype, username, host, key_file))
+                outcome = {'instance_id': instance_id, "host": host, 'result': "Unsupported action"}
+                aresults["results"].append(outcome)
+            activity_results['step_results'].append(aresults)
+        post_wait = activity.get('post_wait', 0.0)
+        time.sleep(post_wait)            
     return activity_results
 
 
